@@ -175,6 +175,84 @@ def read_recent_history(fg: Any, city: str, hours_back: int = 48) -> List[Dict[s
         logger.error("Failed to read recent history for city '%s': %s", city, err)
         return []
 
+def get_or_create_prediction_log_group(fs: Any) -> Any:
+    """Retrieve or create Hopsworks Feature Group for logging predictions."""
+    try:
+        fg = fs.get_or_create_feature_group(
+            name="aqi_prediction_log",
+            version=1,
+            primary_key=["city", "forecast_timestamp"],
+            description="Log of past AQI predictions against actuals",
+            online_enabled=True,
+        )
+        logger.info("Retrieved or created Prediction Log Feature Group (v1)")
+        return fg
+    except Exception as err:
+        logger.error("Failed to get or create Prediction Log FG: %s", err)
+        return None
+
+def write_prediction_log(df: pd.DataFrame, config: Any = None) -> bool:
+    """Writes prediction log to Hopsworks and local CSV fallback."""
+    # Write to local CSV fallback
+    try:
+        from pathlib import Path
+        local_dir = Path(__file__).resolve().parent.parent / "data"
+        local_dir.mkdir(exist_ok=True)
+        csv_path = local_dir / "prediction_log.csv"
+        
+        if csv_path.exists():
+            existing_df = pd.read_csv(csv_path)
+            combined = pd.concat([existing_df, df]).drop_duplicates(subset=["city", "forecast_timestamp"], keep="last")
+            combined.to_csv(csv_path, index=False)
+        else:
+            df.to_csv(csv_path, index=False)
+        logger.info(f"Successfully appended {len(df)} rows to local prediction log CSV.")
+    except Exception as e:
+        logger.warning(f"Failed to write local prediction log CSV: {e}")
+
+    # Write to Hopsworks
+    try:
+        fs = get_feature_store_connection(config)
+        fg = get_or_create_prediction_log_group(fs)
+        if fg is not None:
+            logger.info("Writing into Hopsworks prediction log FG...")
+            fg.insert(df)
+            return True
+    except Exception as err:
+        logger.error("Failed to write prediction log to Hopsworks: %s", err)
+        
+    return False
+
+def read_prediction_log(config: Any = None, days_back: int = 30) -> pd.DataFrame:
+    """Reads prediction log from Hopsworks or local CSV fallback."""
+    try:
+        fs = get_feature_store_connection(config)
+        fg = get_or_create_prediction_log_group(fs)
+        df = fg.read()
+        
+        if df is not None and not df.empty:
+            df["forecast_timestamp"] = pd.to_datetime(df["forecast_timestamp"], utc=True)
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+            df = df[df["forecast_timestamp"] >= cutoff]
+            return df.sort_values("forecast_timestamp")
+    except Exception as err:
+        logger.warning("Failed to read from Hopsworks Prediction Log: %s. Trying local CSV...", err)
+        
+    # Local fallback
+    try:
+        from pathlib import Path
+        csv_path = Path(__file__).resolve().parent.parent / "data" / "prediction_log.csv"
+        if csv_path.exists():
+            df = pd.read_csv(csv_path)
+            df["forecast_timestamp"] = pd.to_datetime(df["forecast_timestamp"], utc=True)
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+            df = df[df["forecast_timestamp"] >= cutoff]
+            return df.sort_values("forecast_timestamp")
+    except Exception as e:
+        logger.error(f"Failed to read local prediction log: {e}")
+        
+    return pd.DataFrame()
+
 
 if __name__ == "__main__":
     import sys
