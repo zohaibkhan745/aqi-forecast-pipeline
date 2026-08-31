@@ -159,6 +159,29 @@ python -m unittest discover -s tests
 
 Or using `pytest`:
 
-```bash
-pytest
 ```
+
+## Deployment
+
+### Streamlit Community Cloud
+
+This repository is configured to be deployed automatically on [Streamlit Community Cloud](https://streamlit.io/cloud).
+
+**Steps to deploy:**
+1. Connect your GitHub repository to Streamlit Community Cloud.
+2. Set the **Main file path** to `app/streamlit_app.py`.
+3. In the Streamlit app dashboard, go to **Settings > Secrets**.
+4. Paste the required API keys using TOML format. It should exactly match this snippet:
+
+```toml
+# Streamlit Cloud Secrets (.streamlit/secrets.toml format)
+AQICN_API_TOKEN = "your-aqicn-token"
+OPENWEATHER_API_KEY = "your-openweather-key"
+HOPSWORKS_API_KEY = "your-hopsworks-key"
+HOPSWORKS_PROJECT_NAME = "your-hopsworks-project-name"
+CITY_NAME = "Lahore"
+CITY_LAT = "31.558"
+CITY_LON = "74.3507"
+```
+
+Once the secrets are saved, Streamlit will automatically install dependencies from `requirements.txt` and launch the interactive Air Quality dashboard.
