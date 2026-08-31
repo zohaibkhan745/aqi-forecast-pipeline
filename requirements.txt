@@ -6,3 +6,7 @@ hopsworks
 pytest
 matplotlib
 seaborn
+scikit-learn
+joblib
+streamlit
+plotly
