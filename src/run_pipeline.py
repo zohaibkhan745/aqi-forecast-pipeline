@@ -7,6 +7,7 @@ import argparse
 import json
 import logging
 import sys
+import os
 
 from datetime import datetime, timezone
 
@@ -135,6 +136,14 @@ def _safe_print(text: str) -> None:
 
 def main() -> None:
     """Main CLI entrypoint with error handling."""
+    logger.info("--- Environment Variables Health Check ---")
+    for var in config.REQUIRED_ENV_VARS:
+        val = os.getenv(var)
+        if val:
+            logger.info("%s: ✓ loaded", var)
+        else:
+            logger.warning("%s: ✗ missing", var)
+            
     args = parse_args()
     city_name = args.city or getattr(config, "CITY_NAME", "Unknown")
     run_time = datetime.now(timezone.utc).isoformat()
