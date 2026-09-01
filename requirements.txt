@@ -10,4 +10,4 @@ scikit-learn
 joblib
 streamlit
 plotly
-deltalake
+confluent-kafka
