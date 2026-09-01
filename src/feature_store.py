@@ -70,7 +70,7 @@ def get_feature_store_connection(config: Any) -> Any:
 
 def get_or_create_feature_group(
     fs: Any,
-    name: str = "aqi_features",
+    name: str = "aqi_features_v2",
     version: int = 1,
     primary_key: Optional[List[str]] = None,
 ) -> Any:
@@ -95,6 +95,7 @@ def get_or_create_feature_group(
             primary_key=primary_key,
             description="AQI and weather features for forecasting",
             online_enabled=True,
+            time_travel_format="HUDI"
         )
         logger.info("Retrieved or created Feature Group '%s' (v%d)", name, version)
         return fg
@@ -192,11 +193,12 @@ def get_or_create_prediction_log_group(fs: Any) -> Any:
     """Retrieve or create Hopsworks Feature Group for logging predictions."""
     try:
         fg = fs.get_or_create_feature_group(
-            name="aqi_prediction_log",
+            name="aqi_prediction_log_v2",
             version=1,
             primary_key=["city", "forecast_timestamp"],
             description="Log of past AQI predictions against actuals",
             online_enabled=True,
+            time_travel_format="HUDI"
         )
         logger.info("Retrieved or created Prediction Log Feature Group (v1)")
         return fg
