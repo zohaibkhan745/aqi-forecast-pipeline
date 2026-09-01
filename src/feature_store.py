@@ -115,6 +115,19 @@ def write_feature_row(fg: Any, feature_row: Dict[str, Any]) -> bool:
     """
     try:
         df = pd.DataFrame([feature_row])
+        
+        # Enforce float64 on known numeric columns to prevent Hopsworks 'null' dtype errors
+        numeric_cols = [
+            'aqi', 'pm25', 'pm10', 'o3', 'no2', 'so2', 'co', 
+            'temperature', 'humidity', 'wind_speed', 'pressure',
+            'aqi_change_rate_1h', 'aqi_change_rate_24h', 
+            'aqi_rolling_mean_6h', 'aqi_rolling_mean_24h', 
+            'pm25_pm10_ratio', 'target_aqi_3d'
+        ]
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = df[col].astype('float64')
+                
         logger.info("Writing feature row into Hopsworks Feature Group '%s'...", getattr(fg, "name", "fg"))
         fg.insert(df)
         logger.info(
