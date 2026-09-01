@@ -16,7 +16,8 @@ project_root = Path(__file__).resolve().parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from app import data_loader, predict
+import requests
+from app import predict
 
 st.set_page_config(
     page_title="Lahore AQI Forecast",
@@ -69,46 +70,38 @@ def main():
         st.rerun()
         
     try:
-        with st.spinner("Connecting to Model Registry and Feature Store..."):
-            recent_features = data_loader.load_recent_features(hours_back=120)
-            model, scaler, imputer, model_version, model_updated_at = data_loader.load_latest_model_and_scaler()
+        with st.spinner("Connecting to Prediction API... (First load may take up to 20 seconds)"):
+            health_res = requests.get("http://localhost:8000/health", timeout=120)
+            health_res.raise_for_status()
+            health_data = health_res.json()
+            
+            forecast_res = requests.get("http://localhost:8000/forecast", timeout=120)
+            forecast_res.raise_for_status()
+            forecast_data = forecast_res.json()
             
         st.sidebar.success("✅ Online & Connected")
         
-        if not recent_features.empty:
-            latest_row = recent_features.iloc[-1]
-            latest_time = latest_row["fetched_at"]
-            hours_ago = int((datetime.now(latest_time.tzinfo) - latest_time).total_seconds() / 3600)
-            
-            st.sidebar.markdown(f"**Last feature update:** {hours_ago} hours ago")
-            st.sidebar.markdown(f"**Model version:** {model_version}")
-            if model_updated_at != "Unknown":
-                st.sidebar.markdown(f"**Model retrained:** {str(model_updated_at)[:10]}")
-            else:
-                st.sidebar.markdown("**Model retrained:** Offline Fallback")
-        else:
-            st.sidebar.warning("No recent features found.")
-            st.warning("Feature Store returned empty data. Wait for the pipeline to run.")
+        st.sidebar.markdown(f"**Model version:** {health_data.get('model_version', 'Unknown')}")
+        st.sidebar.markdown(f"**Model retrained:** {str(health_data.get('model_updated_at', 'Unknown'))[:10]}")
+        
+        current_aqi = forecast_data.get("current_aqi")
+        forecasts = forecast_data.get("forecasts", [])
+        
+        if not forecasts:
+            st.warning("No forecast data returned.")
             return
-
+            
+        forecast_df = pd.DataFrame(forecasts)
+        forecast_df["forecast_timestamp"] = pd.to_datetime(forecast_df["timestamp"])
+        
     except Exception as e:
         st.sidebar.error("❌ Offline / Error")
-        st.error(f"Unable to load latest data — please try again in a few minutes. (Details: {e})")
-        return
-        
-    # Get Current AQI
-    current_aqi = latest_row.get("aqi")
-    
-    # Generate Forecast
-    try:
-        with st.spinner("Generating 3-Day Forecast..."):
-            forecast_df = predict.generate_3day_forecast(model, scaler, imputer, recent_features)
-    except Exception as e:
-        st.error(f"Failed to generate forecast: {e}")
+        st.error(f"Unable to connect to the prediction API — please try again in a few minutes. (Details: {e})")
+        st.info("Make sure the FastAPI server is running: `uvicorn app.api:app --reload --port 8000`")
         return
         
     # --- TABS ---
-    tab1, tab2 = st.tabs(["🔮 72-Hour Forecast", "📊 Historical Trends"])
+    tab1, tab2, tab3 = st.tabs(["🔮 72-Hour Forecast", "📊 Historical Trends", "🔍 Feature Explanations"])
     
     with tab1:
         # Forecast Alert Banner
@@ -174,7 +167,7 @@ def main():
             display_df = forecast_df.copy()
             display_df["Time"] = display_df["forecast_timestamp"].dt.strftime("%a, %b %d - %I:%M %p")
             display_df["Predicted AQI"] = display_df["predicted_aqi"].round(0).astype(int)
-            display_df["Category"] = display_df["aqi_category"]
+            display_df["Category"] = display_df["category"]
             display_df = display_df[["Time", "Predicted AQI", "Category"]]
             
             def color_category(val):
@@ -223,6 +216,40 @@ def main():
                 
         except Exception as e:
             st.warning(f"Unable to load prediction log: {e}")
+
+    with tab3:
+        st.subheader("What's Driving the Forecast?")
+        st.write("These features had the most significant impact on the current AQI prediction.")
+        
+        try:
+            with st.spinner("Generating Explanations..."):
+                explain_res = requests.get("http://localhost:8000/explain", timeout=60)
+                if explain_res.status_code == 200:
+                    explain_data = explain_res.json()
+                    importance_dict = explain_data.get("feature_importance", {})
+                    
+                    if not importance_dict:
+                        st.info("No feature importance data available for this model.")
+                    else:
+                        # Convert to DataFrame for Plotly
+                        imp_df = pd.DataFrame(list(importance_dict.items()), columns=["Feature", "Impact"])
+                        # Take top 10 and sort ascending so largest is at the top of the horizontal bar chart
+                        imp_df = imp_df.head(10).sort_values("Impact", ascending=True)
+                        
+                        fig3 = px.bar(
+                            imp_df, 
+                            x="Impact", 
+                            y="Feature", 
+                            orientation='h',
+                            title="Top 10 Influential Features (SHAP Values)",
+                            color="Impact",
+                            color_continuous_scale="Blues"
+                        )
+                        st.plotly_chart(fig3, use_container_width=True)
+                else:
+                    st.warning("Explanation API returned an error.")
+        except Exception as e:
+            st.error(f"Failed to fetch explanations: {e}")
 
     # --- FOOTER ---
     st.markdown('<div class="footer">', unsafe_allow_html=True)

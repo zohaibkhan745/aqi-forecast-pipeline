@@ -82,8 +82,24 @@ def generate_3day_forecast(model, scaler, imputer, recent_features: pd.DataFrame
     # Prepare features for the model
     # Drop non-numeric and target columns
     X_df = df.drop(columns=["target_aqi_3d", "fetched_at", "city", "season", "_sort_dt"], errors="ignore")
-    # Also drop categorical that weren't encoded or keep them if they are numeric
+    
+    # Ensure all remaining columns are treated as numeric (Hopsworks/CSV can sometimes return them as object if they contain NaNs)
+    for col in X_df.columns:
+        X_df[col] = pd.to_numeric(X_df[col], errors="coerce")
+        
     X_df = X_df.select_dtypes(include=[np.number])
+    
+    # Align columns to what the model/imputer/scaler expects
+    expected_cols = None
+    if hasattr(model, "feature_names_in_"):
+        expected_cols = list(model.feature_names_in_)
+    elif imputer and hasattr(imputer, "feature_names_in_"):
+        expected_cols = list(imputer.feature_names_in_)
+    elif scaler and hasattr(scaler, "feature_names_in_"):
+        expected_cols = list(scaler.feature_names_in_)
+        
+    if expected_cols is not None:
+        X_df = X_df.reindex(columns=expected_cols)
     
     if is_sklearn:
         # Classical model (Ridge/RF)
@@ -150,3 +166,120 @@ def generate_3day_forecast(model, scaler, imputer, recent_features: pd.DataFrame
     forecast_df = forecast_df.dropna(subset=["predicted_aqi"]).reset_index(drop=True)
     
     return forecast_df
+
+def generate_shap_explanation(model, scaler, imputer, recent_features: pd.DataFrame) -> dict:
+    """
+    Computes SHAP values for the most recent feature row.
+    Returns a dictionary mapping feature names to their absolute SHAP importance.
+    """
+    import shap
+    
+    if recent_features.empty:
+        return {}
+        
+    df = recent_features.copy()
+    df = df.sort_values("fetched_at").reset_index(drop=True)
+    
+    is_keras = hasattr(model, "predict") and "keras" in str(type(model)).lower()
+    
+    X_df = df.drop(columns=["target_aqi_3d", "fetched_at", "city", "season", "_sort_dt"], errors="ignore")
+    for col in X_df.columns:
+        X_df[col] = pd.to_numeric(X_df[col], errors="coerce")
+    X_df = X_df.select_dtypes(include=[np.number])
+    
+    # Align columns to what the model/imputer/scaler expects
+    expected_cols = None
+    if hasattr(model, "feature_names_in_"):
+        expected_cols = list(model.feature_names_in_)
+    elif imputer and hasattr(imputer, "feature_names_in_"):
+        expected_cols = list(imputer.feature_names_in_)
+    elif scaler and hasattr(scaler, "feature_names_in_"):
+        expected_cols = list(scaler.feature_names_in_)
+        
+    if expected_cols is not None:
+        X_df = X_df.reindex(columns=expected_cols)
+        
+    feature_names = X_df.columns.tolist()
+    
+    if is_keras:
+        # LSTM Model
+        lookback = 24
+        if len(X_df) < lookback:
+            return {}
+            
+        if scaler:
+            X_scaled = scaler.transform(X_df)
+        else:
+            X_scaled = X_df.values
+            
+        seq = X_scaled[-lookback:]
+        # Use a background of a few recent sequences to speed up DeepExplainer
+        background = []
+        for i in range(max(0, len(X_scaled) - lookback - 10), len(X_scaled) - lookback):
+            background.append(X_scaled[i:i+lookback])
+            
+        if not background:
+            # Not enough data for a background, fallback to dummy
+            background = [np.zeros_like(seq)]
+            
+        background = np.array(background)
+        
+        try:
+            # GradientExplainer works well for Keras sequences
+            explainer = shap.GradientExplainer(model, background)
+            shap_values = explainer.shap_values(np.expand_dims(seq, axis=0))
+            
+            # shape could be (1, 24, features) depending on SHAP version/model
+            # we want the aggregate impact per feature
+            if isinstance(shap_values, list):
+                shap_vals = shap_values[0]
+            else:
+                shap_vals = shap_values
+                
+            if len(shap_vals.shape) == 3:
+                # Average over the lookback window
+                shap_vals = np.abs(shap_vals[0]).mean(axis=0)
+            else:
+                shap_vals = np.abs(shap_vals[0])
+                
+        except Exception as e:
+            print(f"SHAP explanation failed for LSTM: {e}")
+            return {}
+            
+    else:
+        # Classical model (Ridge/RF)
+        if imputer:
+            X = imputer.transform(X_df)
+        else:
+            X = X_df.values
+            
+        instance = X[-1].reshape(1, -1)
+        background = X[-100:] if len(X) > 100 else X
+        
+        try:
+            if type(model).__name__ in ['RandomForestRegressor', 'GradientBoostingRegressor']:
+                explainer = shap.TreeExplainer(model)
+                shap_values = explainer.shap_values(instance)
+            elif type(model).__name__ in ['Ridge', 'LinearRegression']:
+                explainer = shap.LinearExplainer(model, background)
+                shap_values = explainer.shap_values(instance)
+            else:
+                # Generic explainer
+                explainer = shap.Explainer(model, background)
+                shap_values = explainer(instance).values
+                
+            if isinstance(shap_values, list):
+                shap_vals = np.abs(shap_values[0])
+            else:
+                shap_vals = np.abs(shap_values[0])
+                
+        except Exception as e:
+            print(f"SHAP explanation failed for sklearn: {e}")
+            return {}
+            
+    # Combine feature names with their absolute SHAP importance
+    importance_dict = {feat: float(val) for feat, val in zip(feature_names, shap_vals)}
+    # Sort by importance descending
+    importance_dict = dict(sorted(importance_dict.items(), key=lambda item: item[1], reverse=True))
+    
+    return importance_dict

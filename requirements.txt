@@ -11,3 +11,6 @@ joblib
 streamlit
 plotly
 confluent-kafka
+fastapi
+uvicorn
+shap

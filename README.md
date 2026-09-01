@@ -159,11 +159,34 @@ python -m unittest discover -s tests
 
 Or using `pytest`:
 
+```bash
+pytest
 ```
 
-## Deployment
+---
 
-### Streamlit Community Cloud
+## 🌐 Running the Web Application & API
+
+The project uses a microservice architecture with a FastAPI backend for model serving and SHAP explanations, and a Streamlit frontend for the interactive dashboard.
+
+### 1. Start the FastAPI Backend
+Open a terminal and run:
+```bash
+uvicorn app.api:app --reload --port 8000
+```
+*You can access the auto-generated API documentation at http://localhost:8000/docs.*
+
+### 2. Start the Streamlit Frontend
+Open a new terminal and run:
+```bash
+streamlit run app/streamlit_app.py --server.port 8501
+```
+
+---
+
+## ☁️ Deployment
+
+### Streamlit Community Cloud (Frontend Only)
 
 This repository is configured to be deployed automatically on [Streamlit Community Cloud](https://streamlit.io/cloud).
 
