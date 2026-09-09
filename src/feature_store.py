@@ -130,15 +130,32 @@ def write_feature_row(fg: Any, feature_row: Dict[str, Any]) -> bool:
                 df[col] = df[col].astype('float64')
                 
         logger.info("Writing feature row into Hopsworks Feature Group '%s'...", getattr(fg, "name", "fg"))
-        fg.insert(df)
-        logger.info(
-            "Successfully inserted feature row for city '%s' at '%s'",
-            feature_row.get("city"),
-            feature_row.get("fetched_at"),
-        )
-        return True
+        
+        # Retry mechanism for transient network issues
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                fg.insert(df)
+                logger.info(
+                    "Successfully inserted feature row for city '%s' at '%s'",
+                    feature_row.get("city"),
+                    feature_row.get("fetched_at"),
+                )
+                return True
+            except Exception as insert_err:
+                if attempt < max_retries:
+                    import time
+                    wait_time = 5 * attempt
+                    logger.warning(
+                        "Attempt %d/%d to insert feature row failed: %s. Retrying in %d seconds...", 
+                        attempt, max_retries, insert_err, wait_time
+                    )
+                    time.sleep(wait_time)
+                else:
+                    logger.error("Failed to write feature row to Hopsworks Feature Group after %d attempts: %s", max_retries, insert_err)
+                    return False
     except Exception as err:
-        logger.error("Failed to write feature row to Hopsworks Feature Group: %s", err)
+        logger.error("Unexpected error preparing feature row for Hopsworks: %s", err)
         return False
 
 
